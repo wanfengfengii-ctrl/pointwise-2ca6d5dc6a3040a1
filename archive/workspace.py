@@ -25,7 +25,15 @@ CREATE TABLE IF NOT EXISTS reels (
     block_count INTEGER NOT NULL CHECK (block_count > 0),
     block_width INTEGER NOT NULL CHECK (block_width > 0),
     base_name TEXT NOT NULL UNIQUE,
-    original_checks TEXT NOT NULL
+    original_checks TEXT NOT NULL,
+    reuse_slots INTEGER NOT NULL DEFAULT 0 CHECK (reuse_slots IN (0, 1))
+);
+CREATE TABLE IF NOT EXISTS reel_slots (
+    reel_id TEXT NOT NULL REFERENCES reels(reel_id),
+    block_no INTEGER NOT NULL,
+    slot INTEGER NOT NULL CHECK (slot IN (0, 1)),
+    digest TEXT NOT NULL,
+    PRIMARY KEY (reel_id, block_no, slot)
 );
 CREATE TABLE IF NOT EXISTS changes (
     request_id TEXT PRIMARY KEY NOT NULL,
@@ -95,7 +103,15 @@ def initialize_workspace(workspace: Workspace) -> None:
         for statement in _SCHEMA.split(';'):
             if statement.strip():
                 database.execute(statement)
+        _migrate(database)
     sync_directory(workspace.root)
+
+
+def _migrate(database: sqlite3.Connection) -> None:
+    """Bring catalogues written by older releases up to the current schema."""
+    columns = {row['name'] for row in database.execute('PRAGMA table_info(reels)')}
+    if 'reuse_slots' not in columns:
+        database.execute('ALTER TABLE reels ADD COLUMN reuse_slots INTEGER NOT NULL DEFAULT 0')
 
 
 def open_workspace(root: str | Path) -> Workspace:

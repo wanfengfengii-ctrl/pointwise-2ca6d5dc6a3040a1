@@ -12,6 +12,7 @@ class ReelRecord:
     base_name: str
     original_checks: tuple[str, ...]
     initial_version: int = 1
+    reuse_slots: bool = False
 
 
 def validate_reel_id(reel_id: str) -> None:
@@ -22,10 +23,11 @@ def validate_reel_id(reel_id: str) -> None:
 
 def register_reel(database: sqlite3.Connection, reel: ReelRecord) -> None:
     database.execute(
-        'INSERT INTO reels(reel_id, block_count, block_width, base_name, original_checks) '
-        'VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO reels(reel_id, block_count, block_width, base_name, original_checks, '
+        'reuse_slots) VALUES (?, ?, ?, ?, ?, ?)',
         (reel.reel_id, reel.layout.block_count, reel.layout.block_width,
-         reel.base_name, json.dumps(reel.original_checks, separators=(',', ':'))),
+         reel.base_name, json.dumps(reel.original_checks, separators=(',', ':')),
+         1 if reel.reuse_slots else 0),
     )
 
 
@@ -36,5 +38,5 @@ def get_reel(database: sqlite3.Connection, reel_id: str) -> ReelRecord:
         raise LookupError(f'unknown reel {reel_id!r}')
     return ReelRecord(
         row['reel_id'], BlockLayout(row['block_count'], row['block_width']), row['base_name'],
-        tuple(json.loads(row['original_checks'])),
+        tuple(json.loads(row['original_checks'])), reuse_slots=bool(row['reuse_slots']),
     )

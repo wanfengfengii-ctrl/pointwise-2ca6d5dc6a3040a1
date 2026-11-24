@@ -1,6 +1,25 @@
-"""Run this project's full unittest suite from the repository root."""
+"""Run this project's full check entry from the repository root.
+
+Executes the unittest suite, then the ordinary-reel slot baseline and the
+joint slot-reuse business checks, propagating any failure as a nonzero exit.
+"""
 import sys
 import unittest
+
+
+def run_joint_checks():
+    import check_slot_reuse
+    import check_slot_reuse_baseline
+
+    ok = True
+    for name, module in (('slot-reuse-baseline', check_slot_reuse_baseline),
+                         ('slot-reuse-joint', check_slot_reuse)):
+        try:
+            module.main()
+        except Exception as error:
+            print(f'FAIL {name}: {error}', file=sys.stderr)
+            ok = False
+    return ok
 
 
 def main():
@@ -23,7 +42,9 @@ def main():
           f'expected_failures={len(result.expectedFailures)} '
           f'unexpected_successes={len(result.unexpectedSuccesses)} '
           f'result={"PASS" if successful else "FAIL"}')
-    return 0 if successful else 1
+    joint = run_joint_checks()
+    print(f'JOINT CHECK SUMMARY result={"PASS" if joint else "FAIL"}')
+    return 0 if successful and joint else 1
 
 
 if __name__ == '__main__':

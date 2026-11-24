@@ -15,6 +15,7 @@ from revision.publication import amend
 
 
 EXAMPLES = Path(__file__).resolve().parent / 'examples'
+ROOT = Path(__file__).resolve().parent
 
 
 def load_reel(path: Path):
@@ -28,6 +29,65 @@ def load_correction(path: Path):
     data = json.loads(path.read_text(encoding='utf-8'))
     replacements = [(block_no, bytes.fromhex(payload)) for block_no, payload in data['replacements']]
     return data['reel_id'], data['request_id'], data['parent_version'], replacements
+
+
+def slot_reuse_day() -> dict:
+    """One day on a slot-reuse reel: blocked batch, freed-slot retry, reopen, reclaim."""
+    fixture = json.loads((EXAMPLES / 'slot_reuse.json').read_text(encoding='utf-8'))
+    expected = fixture['expected']
+    with TemporaryDirectory(prefix='scan-reel-slots-') as directory:
+        workspace = open_archive(directory)
+        reel = ingest(workspace, *load_reel(ROOT / fixture['source']), reuse_slots=True)
+
+        def submit(name):
+            request = fixture['requests'][name]
+            replacements = [
+                (block_no, value.to_bytes(reel.layout.block_width, 'little', signed=True))
+                for block_no, value in request['readings']
+            ]
+            return amend(workspace, reel.reel_id, request['request_id'],
+                         request['parent_version'], replacements)
+
+        white = open_task(workspace, reel.reel_id)
+        white_prefix = read_next(workspace, white.task_id, fixture['a_prefix'])
+        submit('tail')
+        night = open_task(workspace, reel.reel_id)
+        submit('head')
+        blocked = submit('mixed')
+        white_third = read_next(workspace, white.task_id, 1)
+        retry = submit('mixed')
+        workspace = open_archive(directory)
+        white_tail = read_next(workspace, white.task_id, 4)
+        night_values = read_next(workspace, night.task_id, 4)
+        late = open_task(workspace, reel.reel_id)
+        late_values = read_next(workspace, late.task_id, 4)
+        tasks = (white, night, late)
+        reports = [report(workspace, task_id=task.task_id, threshold=fixture['threshold'])
+                   for task in tasks]
+        for task in tasks:
+            finish(workspace, task.task_id)
+        workspace = open_archive(directory)
+        reclaimed = [report(workspace, report_id=result['report_id']) for result in reports]
+        actual = {
+            'blocked': list(blocked),
+            'retry_version': retry.version,
+            'versions': [task.version for task in tasks],
+            'readings': [[item.value for item in white_prefix + white_third + white_tail],
+                         [item.value for item in night_values],
+                         [item.value for item in late_values]],
+            'hit_blocks': [[hit['block_no'] for hit in result['hits']] for result in reports],
+        }
+        expected_day = {
+            'blocked': expected['blocked'],
+            'retry_version': 4,
+            'versions': [1, 2, 4],
+            'readings': [expected['readings'][key] for key in ('1', '2', '4')],
+            'hit_blocks': [expected['hit_blocks'][key] for key in ('1', '2', '4')],
+        }
+        if actual != expected_day or reclaimed != reports:
+            raise RuntimeError('slot-reuse day did not match the sample ledger')
+        return {'receipt': asdict(retry), 'blocked': list(blocked), 'reports': reclaimed,
+                'readings': actual['readings']}
 
 
 def main() -> None:
@@ -78,6 +138,8 @@ def main() -> None:
             'oracle': '手算四块值域与大于等于 26 的原块明细，两块各四字节，归位后为零。',
         }
         print('POINTWISE_SCENARIO ' + json.dumps(evidence, ensure_ascii=False, sort_keys=True))
+    reuse_day = slot_reuse_day()
+    print(json.dumps({'slot_reuse_day': reuse_day}, ensure_ascii=False, sort_keys=True))
 
 
 if __name__ == '__main__':

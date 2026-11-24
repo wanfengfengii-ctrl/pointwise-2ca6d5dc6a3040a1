@@ -13,6 +13,7 @@ from revision.media import (
     correction_payload_size, read_correction_block, sync_correction_area, write_correction_block,
 )
 from revision.request import normalize_request, request_identity
+from revision.reuse import plan_reuse, publish_reuse
 
 
 @dataclass(frozen=True)
@@ -25,7 +26,9 @@ class AmendReceipt:
 def amend(
     workspace: Workspace, reel_id: str, request_id: str, parent_version: int,
     replacements: Iterable[tuple[int, bytes]], *, checkpoint: Callable[[str], None] | None = None,
-) -> AmendReceipt:
+) -> AmendReceipt | tuple[int, ...]:
+    reuse_published = False
+    receipt = None
     with work_transaction(workspace) as database:
         reel = get_reel(database, reel_id)
         request = normalize_request(reel, request_id, parent_version, replacements)
@@ -40,11 +43,27 @@ def amend(
             current, _ = current_revision(database, reel)
             if parent_version != current:
                 raise ValueError(f'expected parent version {current}, got {parent_version}')
-            if get_active_change(database, reel_id) is not None:
-                raise ValueError(f'an unfinalized correction exists for reel {reel_id!r}')
-            if current == 2**63 - 1:
-                raise ValueError('reel has exhausted its version numbers')
-            record_pending(database, request, identity)
+            if reel.reuse_slots:
+                if current == 2**63 - 1:
+                    raise ValueError('reel has exhausted its version numbers')
+                blocked, writes = plan_reuse(database, reel, request)
+                if blocked:
+                    return blocked
+                publish_reuse(workspace, database, reel, request, writes, identity,
+                              checkpoint=checkpoint)
+                receipt = AmendReceipt(request.reel_id, request.request_id,
+                                       request.parent_version + 1)
+                reuse_published = True
+            else:
+                if get_active_change(database, reel_id) is not None:
+                    raise ValueError(f'an unfinalized correction exists for reel {reel_id!r}')
+                if current == 2**63 - 1:
+                    raise ValueError('reel has exhausted its version numbers')
+                record_pending(database, request, identity)
+    if reuse_published:
+        if checkpoint is not None:
+            checkpoint('publication_committed')
+        return receipt
 
     with work_transaction(workspace) as database:
         change = get_change(database, request_id)

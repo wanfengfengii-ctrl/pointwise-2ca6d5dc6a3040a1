@@ -60,10 +60,9 @@ class WorkspaceCase(unittest.TestCase):
         with work_transaction(self.workspace) as database:
             return database.execute(sql, parameters).fetchone()[0]
 
-    def interrupt(self, action, checkpoint, task_id=None):
+    def interrupt(self, action, checkpoint, *rest):
         command = [sys.executable, '-B', '-m', 'tests.support', action, str(self.root), checkpoint]
-        if task_id is not None:
-            command.append(str(task_id))
+        command.extend(str(item) for item in rest)
         result = subprocess.run(command, cwd=PROJECT, capture_output=True, text=True, timeout=45)
         self.assertEqual(result.returncode, CHECKPOINT_EXIT, result.stdout + result.stderr)
         self.assertIn('CHECKPOINT ' + checkpoint, result.stdout.splitlines())
@@ -113,6 +112,13 @@ def _worker(arguments):
         amend(workspace, *load_correction(EXAMPLES / 'correction.json'), checkpoint=checkpoint)
     elif action == 'finish' and len(rest) == 1:
         finish(workspace, int(rest[0]), checkpoint=checkpoint)
+    elif action == 'slot-amend' and len(rest) == 3:
+        request_id, parent_version, payload = rest
+        reel_id = load_reel(EXAMPLES / 'reel.json')[0]
+        replacements = [(block_no, bytes.fromhex(hexed))
+                        for block_no, hexed in json.loads(payload)]
+        amend(workspace, reel_id, request_id, int(parent_version), replacements,
+              checkpoint=checkpoint)
     else:
         raise ValueError('unknown checkpoint worker invocation')
     raise RuntimeError(f'operation returned before checkpoint {target!r}')

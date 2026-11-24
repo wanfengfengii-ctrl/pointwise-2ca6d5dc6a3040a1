@@ -18,6 +18,8 @@ def ingest(
     layout: BlockLayout,
     blocks: Iterable[bytes],
     checksums: Iterable[str],
+    *,
+    reuse_slots: bool = False,
 ) -> ReelRecord:
     validate_reel_id(reel_id)
     validate_layout(layout)
@@ -31,7 +33,7 @@ def ingest(
         verify_block(payload, expected, block_no)
 
     base_name = 'base-' + sha256(reel_id.encode('utf-8')).hexdigest() + '.bin'
-    reel = ReelRecord(reel_id, layout, base_name, checks)
+    reel = ReelRecord(reel_id, layout, base_name, checks, reuse_slots=bool(reuse_slots))
     with work_transaction(workspace) as database:
         if database.execute('SELECT 1 FROM reels WHERE reel_id = ?', (reel_id,)).fetchone():
             raise ValueError(f'reel number already registered: {reel_id!r}')
@@ -44,6 +46,11 @@ def ingest(
         sync_base(path)
         sync_directory(workspace.media)
         register_reel(database, reel)
+        if reel.reuse_slots:
+            database.executemany(
+                'INSERT INTO reel_slots(reel_id, block_no, slot, digest) VALUES (?, ?, 0, ?)',
+                ((reel.reel_id, block_no, digest) for block_no, digest in enumerate(checks)),
+            )
     return reel
 
 
